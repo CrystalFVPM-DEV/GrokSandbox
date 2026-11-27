@@ -35,7 +35,7 @@ No hay un yolk público que combine murmur + un bot de música mantenido. El egg
 - `mumble-server` 1.5.x (paquete Debian), ffmpeg, libopus, Python 3
 - Bragi `2026.08.31` en `/opt/bragi` con venv; yt-dlp se instala/actualiza en ese venv
 - Entrypoint estilo Pterodactyl (usuario `container`, `/home/container`)
-- `start-premium.sh` aplica las variables del panel, pone la contraseña SuperUser con `mumble-server -supw` (si está definida), arranca murmur y después Bragi contra **`127.0.0.1:$SERVER_PORT`**
+- `start-premium.sh` aplica las variables del panel, pone la contraseña SuperUser con `mumble-server -supw` (si está definida), espera a que murmur acepte TLS en el puerto de allocation, y arranca Bragi contra **`127.0.0.1:$SERVER_PORT`** (nunca `SERVER_IP`; Wings pone ahí la IP pública de allocation, que desde dentro del contenedor suele fallar por NAT hairpin). El host y el puerto de conexión se registran en consola.
 
 La imagen se publica en:
 
@@ -93,7 +93,7 @@ Docker 26.1.5 se instaló en la caja y se construyó `aerohost-mumble-premium:te
 
 - **murmur** 1.5.735 escuchó en `0.0.0.0:26438` (`Server listening on`).
 - Se aplicó la contraseña SuperUser con `mumble-server -supw` (valor solo de prueba, no va en el egg).
-- **Bragi** se conectó a `127.0.0.1:26438` como `AeroHost DJ` (murmur: `Authenticated`; bot: `Initialization complete`).
+- **Bragi** se conectó a `127.0.0.1:25566` como `AeroHost DJ` con `SERVER_IP=54.37.59.143` (murmur: `Authenticated`; bot: `Initialization complete`). También se verificó antes en `26438`.
 - **yt-dlp 2026.11.23** resolvió `ytsearch1:never gonna give you up` → `Rick Astley - Never Gonna Give You Up (Official Video) (4K Remaster) [youtube]` (sin descargar).
 - Avisos esperables, no bloqueantes: fallo de Zeroconf/Avahi dentro del contenedor, y `Failed to set IPV6_RECVPKTINFO` al bindear solo IPv4.
 

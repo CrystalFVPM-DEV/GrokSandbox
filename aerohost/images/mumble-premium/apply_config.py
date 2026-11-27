@@ -25,6 +25,54 @@ def env(name: str, default: str = "") -> str:
     return val.strip()
 
 
+def valid_port(value: str) -> str:
+    try:
+        n = int(str(value).strip())
+    except (TypeError, ValueError):
+        return ""
+    if 1 <= n <= 65535:
+        return str(n)
+    return ""
+
+
+def murmur_ini_port() -> str:
+    """Read a pre-existing port from murmur.ini (Wings egg parser writes it)."""
+    if not MURMUR_INI.exists():
+        return ""
+    for line in MURMUR_INI.read_text(encoding="utf-8", errors="replace").splitlines():
+        s = line.strip()
+        if s.startswith(";") or s.startswith("#"):
+            continue
+        m = re.match(r"^port\s*=\s*(\d+)\s*$", s, re.I)
+        if m:
+            return valid_port(m.group(1))
+    return ""
+
+
+def resolve_port() -> str:
+    """Always prefer Wings SERVER_PORT. Never silently default to 64738 if
+    murmur.ini already has the allocation port from the egg config parser."""
+    from_env = valid_port(env("SERVER_PORT", ""))
+    if from_env:
+        return from_env
+    from_ini = murmur_ini_port()
+    if from_ini:
+        return from_ini
+    return "64738"
+
+
+def resolve_users() -> str:
+    raw = env("MAX_USERS", "40")
+    try:
+        n = int(float(raw))
+    except ValueError:
+        n = 40
+    # Leave room for the bot plus at least a couple of listeners.
+    if n < 5:
+        n = 5
+    return str(n)
+
+
 def ini_quote(value: str) -> str:
     s = "" if value is None else str(value)
     if any(ch in s for ch in ' \t#;"\'=,\\'):
@@ -110,7 +158,7 @@ def write_bragi_ini() -> None:
     if BRAGI_INI.exists():
         existing.read(BRAGI_INI, encoding="utf-8")
 
-    port = env("SERVER_PORT", "64738")
+    port = resolve_port()
     channel = env("BOT_CHANNEL", "")
     password = env("SERVER_PASSWORD", "")
     username = env("BOT_NAME", "AeroHost DJ") or "AeroHost DJ"
@@ -211,8 +259,8 @@ def main() -> int:
     (CONTAINER / "music").mkdir(exist_ok=True)
     (CONTAINER / "tmp").mkdir(exist_ok=True)
 
-    port = env("SERVER_PORT", "64738")
-    users = env("MAX_USERS", "40")
+    port = resolve_port()
+    users = resolve_users()
     bandwidth = env("BANDWIDTH", "558000")
     server_password = env("SERVER_PASSWORD", "")
 
@@ -238,8 +286,17 @@ def main() -> int:
         }
     )
     write_bragi_ini()
+    bot = env("BOT_NAME", "AeroHost DJ") or "AeroHost DJ"
+    server_ip = env("SERVER_IP", "") or "unset"
+    password_state = "set" if server_password else "empty"
     print("Applied Mumble Premium configuration for port " + port + ",", file=sys.stderr)
-    print("users=" + users + ", bandwidth=" + str(bw) + ", bot=" + (env("BOT_NAME", "AeroHost DJ") or "AeroHost DJ") + ".", file=sys.stderr)
+    print("users=" + users + ", bandwidth=" + str(bw) + ", bot=" + bot + ".", file=sys.stderr)
+    print(
+        "Bragi will connect to 127.0.0.1:" + port
+        + " (SERVER_IP=" + server_ip + " is not used as the bot host; "
+        + "SERVER_PASSWORD is " + password_state + ").",
+        file=sys.stderr,
+    )
     if COOKIE_FILE.is_file() and COOKIE_FILE.stat().st_size > 0:
         print("Using youtube-cookies.txt for yt-dlp.", file=sys.stderr)
     return 0

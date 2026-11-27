@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 IMAGE="${IMAGE:-aerohost-mumble-premium:fix}"
 NAME="mumble-premium-wings-e2e"
-PORT="${TEST_PORT:-26438}"
+PORT="${TEST_PORT:-25566}"
 UIDNO="${WINGS_UID:-988}"
 VOL="${VOL:-/tmp/mumble-premium-wings-e2e}"
 DOCKER="${DOCKER:-docker}"
@@ -87,6 +87,18 @@ for k, v in replacements.items():
         out.append(f"{k}={v}")
 p.write_text("\n".join(out) + "\n")
 PY
+# Seed a stale Bragi config (public allocation IP + default murmur port) so
+# the start wrapper must overwrite it. Wings sets SERVER_IP to the allocation.
+sudo tee "${VOL}/configuration.ini" >/dev/null << STALE
+[server]
+host = 54.37.59.143
+port = 64738
+password =
+channel =
+certificate =
+tokens =
+STALE
+
 sudo chown -R "${UIDNO}:${UIDNO}" "${VOL}"
 
 ${DOCKER} rm -f "${NAME}" >/dev/null 2>&1 || true
@@ -99,7 +111,7 @@ ${DOCKER} run -d --name "${NAME}" \
     -e HOME=/home/container \
     -e USER=container \
     -e SERVER_PORT="${PORT}" \
-    -e SERVER_IP=0.0.0.0 \
+    -e SERVER_IP=54.37.59.143 \
     -e SERVER_MEMORY=1024 \
     -e STARTUP="/opt/aerohost/start-premium.sh" \
     -e MAX_USERS=40 \
@@ -151,6 +163,24 @@ if echo "${later}" | grep -q "Bragi exited"; then
     ${DOCKER} logs "${NAME}" 2>&1 | tail -n 60
     exit 1
 fi
+if echo "${later}" | grep -q "ConnectionRejectedError"; then
+    echo "FAIL: Bragi raised ConnectionRejectedError"
+    ${DOCKER} logs "${NAME}" 2>&1 | tail -n 60
+    exit 1
+fi
+if ! echo "${later}" | grep -q "Bragi connecting to 127.0.0.1:${PORT}"; then
+    echo "FAIL: console did not log Bragi connecting to 127.0.0.1:${PORT}"
+    exit 1
+fi
+if echo "${later}" | grep -E "Bragi connecting to 54\.37\.59\.143|Bragi music bot on 54\.37\.59\.143"; then
+    echo "FAIL: Bragi was directed at SERVER_IP instead of 127.0.0.1"
+    exit 1
+fi
+cfg_host="$(sudo python3 -c "from configparser import ConfigParser; from pathlib import Path; import sys; c=ConfigParser(interpolation=None); c.read(Path(sys.argv[1])/'configuration.ini', encoding='utf-8'); print(c.get('server','host',fallback=''), c.get('server','port',fallback=''))" "${VOL}")"
+if [ "${cfg_host}" != "127.0.0.1 ${PORT}" ]; then
+    echo "FAIL: configuration.ini was not rewritten to 127.0.0.1:${PORT} (got '${cfg_host}')"
+    exit 1
+fi
 
 if [ "${ok_listen}" != 1 ]; then
     echo "FAIL: 'Server listening on' never appeared on the container console"
@@ -168,5 +198,5 @@ fi
 echo
 echo "PASS: Wings-like start as uid ${UIDNO}."
 echo "  murmur listening line reached stdout."
-echo "  Bragi stayed connected (no restart loop)."
+echo "  Bragi stayed connected to 127.0.0.1:${PORT} with SERVER_IP=54.37.59.143 (no restart loop)."
 echo "  yt-dlp: $(tr '\n' ' ' < /tmp/mumble-premium-ytdlp.txt)"
