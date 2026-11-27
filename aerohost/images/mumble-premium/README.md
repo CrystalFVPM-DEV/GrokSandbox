@@ -35,7 +35,7 @@ No hay un yolk público que combine murmur + un bot de música mantenido. El egg
 - `mumble-server` 1.5.x (paquete Debian), ffmpeg, libopus, Python 3
 - Bragi `2026.08.31` en `/opt/bragi` con venv; yt-dlp se instala/actualiza en ese venv
 - Entrypoint estilo Pterodactyl (usuario `container`, `/home/container`)
-- `start-premium.sh` aplica las variables del panel, pone la contraseña SuperUser con `mumble-server -supw` (si está definida), espera a que murmur acepte TLS en el puerto de allocation, y arranca Bragi contra **`127.0.0.1:$SERVER_PORT`** (nunca `SERVER_IP`; Wings pone ahí la IP pública de allocation, que desde dentro del contenedor suele fallar por NAT hairpin). El host y el puerto de conexión se registran en consola.
+- `start-premium.sh` aplica las variables del panel, reescribe `port=$SERVER_PORT` en `/home/container/murmur.ini` (y quita duplicados u overrides en `murmur.sqlite`), arranca murmur con **`-ini /home/container/murmur.ini`**, comprueba que escucha en `$SERVER_PORT`, espera a que acepte TLS, y arranca Bragi contra **`127.0.0.1:$SERVER_PORT`** (nunca `SERVER_IP` ni un fallback a `64738` si `SERVER_PORT` está definido). El host y el puerto de conexión se registran en consola.
 
 La imagen se publica en:
 

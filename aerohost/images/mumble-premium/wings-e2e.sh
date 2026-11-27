@@ -99,6 +99,37 @@ certificate =
 tokens =
 STALE
 
+# Reproduce the real-node failure mode:
+# 1) leftover port=64738 after port=$SERVER_PORT (murmur uses the last line)
+# 2) a previous boot logged "Server listening on 0.0.0.0:64738"
+# 3) murmur.sqlite config.port=64738, which overrides murmur.ini
+echo "port=64738" | sudo tee -a "${VOL}/murmur.ini" >/dev/null
+sudo tee "${VOL}/murmur.log" >/dev/null << 'STALELOG'
+<W>2026-01-01 00:00:00.000 1 => Server listening on 0.0.0.0:64738
+STALELOG
+sudo chown -R "${UIDNO}:${UIDNO}" "${VOL}"
+echo "==> Creating murmur.sqlite with a leftover port=64738 override"
+${DOCKER} run --rm --user "${UIDNO}:${UIDNO}" \
+    -e HOME=/home/container \
+    -v "${VOL}:/home/container" \
+    -w /home/container \
+    --entrypoint /usr/bin/mumble-server \
+    "${IMAGE}" -ini /home/container/murmur.ini -supw "E2eLocalOnly8k2m" \
+    >/tmp/mumble-premium-supw-seed.log 2>&1 || true
+sudo python3 - "${VOL}" << 'SEEDDB'
+import sqlite3, sys
+from pathlib import Path
+db = Path(sys.argv[1]) / "murmur.sqlite"
+if not db.exists():
+    raise SystemExit("expected murmur.sqlite after mumble-server -supw")
+con = sqlite3.connect(str(db))
+con.execute("DELETE FROM config WHERE lower(key) IN ('port', 'host')")
+con.execute("INSERT INTO config (server_id, key, value) VALUES (1, 'port', '64738')")
+con.commit()
+print("seeded murmur.sqlite config.port=64738")
+con.close()
+SEEDDB
+
 sudo chown -R "${UIDNO}:${UIDNO}" "${VOL}"
 
 ${DOCKER} rm -f "${NAME}" >/dev/null 2>&1 || true
@@ -123,8 +154,8 @@ ${DOCKER} run -d --name "${NAME}" \
     -e BOT_CHANNEL= \
     -v "${VOL}:/home/container" \
     -w /home/container \
-    -p "127.0.0.1:${PORT}:${PORT}/tcp" \
-    -p "127.0.0.1:${PORT}:${PORT}/udp" \
+    -p "${PORT}:${PORT}" \
+    -p "${PORT}:${PORT}/udp" \
     "${IMAGE}"
 
 ok_listen=0
@@ -194,9 +225,36 @@ if ! ${DOCKER} exec "${NAME}" ps aux | grep -q "bragi.py"; then
     echo "FAIL: bragi.py is not running"
     exit 1
 fi
+if echo "${later}" | grep -q "127.0.0.1:64738"; then
+    echo "FAIL: wrapper still targeted 64738 even though SERVER_PORT=${PORT}"
+    exit 1
+fi
+ini_ports="$(sudo python3 -c "import re,sys; from pathlib import Path; ports=[m.group(1) for line in Path(sys.argv[1]).read_text().splitlines() if (m:=__import__('re').match(r'^port\\s*=\\s*(\\d+)\\s*$', line.strip()))]; print(','.join(ports))" "${VOL}/murmur.ini")"
+if [ "${ini_ports}" != "${PORT}" ]; then
+    echo "FAIL: murmur.ini should have exactly port=${PORT} (got '${ini_ports}')"
+    exit 1
+fi
+if ${DOCKER} exec "${NAME}" sh -c 'ss -lntu | grep -E ":64738[[:space:]]"'; then
+    echo "FAIL: murmur is still listening on 64738 inside the container"
+    exit 1
+fi
+
+echo "==> TLS from the host to 127.0.0.1:${PORT} (outside the container)"
+python3 - "${PORT}" << 'OUTTLS'
+import socket, ssl, sys
+port = int(sys.argv[1])
+raw = socket.create_connection(("127.0.0.1", port), 5)
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+sock = ctx.wrap_socket(raw, server_hostname="127.0.0.1")
+print(f"PASS outside: TLS {sock.version()} handshake to 127.0.0.1:{port}")
+sock.close()
+OUTTLS
 
 echo
 echo "PASS: Wings-like start as uid ${UIDNO}."
 echo "  murmur listening line reached stdout."
+echo "  murmur bound 0.0.0.0:${PORT}; TLS from the host to 127.0.0.1:${PORT} succeeded."
 echo "  Bragi stayed connected to 127.0.0.1:${PORT} with SERVER_IP=54.37.59.143 (no restart loop)."
 echo "  yt-dlp: $(tr '\n' ' ' < /tmp/mumble-premium-ytdlp.txt)"

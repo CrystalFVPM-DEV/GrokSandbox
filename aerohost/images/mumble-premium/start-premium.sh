@@ -1,7 +1,6 @@
 #!/bin/bash
-# Start mumble-server, then Bragi connected to 127.0.0.1 on the allocation port.
-# Murmur and Bragi logs are mirrored to the console so Wings can see the
-# "Server listening on" done string and any Bragi crash.
+# Start mumble-server from /home/container/murmur.ini, then Bragi on
+# 127.0.0.1:$SERVER_PORT. Never fall back to 64738 when SERVER_PORT is set.
 set -euo pipefail
 
 cd /home/container
@@ -23,37 +22,22 @@ fi
 
 mkdir -p /home/container/music /home/container/tmp /home/container/.cache
 
+# Wings injects the allocation port. Do not default to 64738.
+if [ -z "${SERVER_PORT:-}" ] || ! [[ "${SERVER_PORT}" =~ ^[0-9]+$ ]] \
+    || [ "${SERVER_PORT}" -lt 1 ] || [ "${SERVER_PORT}" -gt 65535 ]; then
+    echo "ERROR: SERVER_PORT must be a valid allocation port (got '${SERVER_PORT:-unset}'). Refusing to fall back to 64738."
+    exit 1
+fi
+PORT="${SERVER_PORT}"
+MURMUR_INI="/home/container/murmur.ini"
+
 # Apply panel variables to murmur.ini and configuration.ini (passwords are never echoed).
 python3 /opt/aerohost/apply_config.py
 
-# Resolve the allocation port: SERVER_PORT, else murmur.ini (egg parser), never a
-# stale 64738 if the ini already has the real port. Bragi always uses 127.0.0.1.
-PORT="$(python3 - << 'PY'
-import os, re
-from pathlib import Path
-
-def valid(value):
-    try:
-        n = int(str(value).strip())
-    except (TypeError, ValueError):
-        return ""
-    return str(n) if 1 <= n <= 65535 else ""
-
-port = valid(os.environ.get("SERVER_PORT", ""))
-if not port:
-    ini = Path("/home/container/murmur.ini")
-    if ini.is_file():
-        for line in ini.read_text(encoding="utf-8", errors="replace").splitlines():
-            s = line.strip()
-            if s.startswith(";") or s.startswith("#"):
-                continue
-            m = re.match(r"^port\s*=\s*(\d+)\s*$", s, re.I)
-            if m:
-                port = valid(m.group(1))
-                break
-print(port or "64738")
-PY
-)"
+if [ ! -f "${MURMUR_INI}" ]; then
+    echo "ERROR: ${MURMUR_INI} is missing after apply_config."
+    exit 1
+fi
 
 if [ ! -f /home/container/bragi.pem ]; then
     echo "Generating a self-signed certificate for the music bot identity..."
@@ -66,7 +50,7 @@ fi
 if [ -n "${SUPERUSER_PASSWORD:-}" ]; then
     echo "Setting SuperUser password from the panel variable..."
     SUPW_LOG="/home/container/.murmur-supw.log"
-    "${MURMUR_BIN}" -ini /home/container/murmur.ini -supw "${SUPERUSER_PASSWORD}" \
+    "${MURMUR_BIN}" -ini "${MURMUR_INI}" -supw "${SUPERUSER_PASSWORD}" \
         >"${SUPW_LOG}" 2>&1 || true
     # -supw is expected to set the password and exit; do not print the log in case
     # a misconfigured build ever echoed the secret.
@@ -87,8 +71,12 @@ touch /home/container/murmur.log /home/container/bragi.log
 tail -n 0 -F /home/container/murmur.log &
 MURMUR_TAIL_PID=$!
 
-echo "Starting mumble-server on 0.0.0.0:${PORT}..."
-"${MURMUR_BIN}" -fg -ini /home/container/murmur.ini >> /home/container/murmur.log 2>&1 &
+# Only treat listen lines written after this point as the current boot.
+# A previous run may have logged "Server listening on 0.0.0.0:64738".
+LOG_OFFSET="$(wc -c < /home/container/murmur.log | tr -d ' ')"
+
+echo "Starting mumble-server -fg -ini ${MURMUR_INI} on 0.0.0.0:${PORT}..."
+"${MURMUR_BIN}" -fg -ini "${MURMUR_INI}" >> /home/container/murmur.log 2>&1 &
 MURMUR_PID=$!
 
 shutdown() {
@@ -107,47 +95,119 @@ shutdown() {
 }
 trap shutdown SIGINT SIGTERM
 
-# Wait until murmur's log says it is listening, or the process dies.
-ready=0
-for i in $(seq 1 45); do
-    if ! kill -0 "${MURMUR_PID}" 2>/dev/null; then
-        echo "ERROR: mumble-server exited before it started listening. Last log lines:"
-        tail -n 40 /home/container/murmur.log || true
-        exit 1
-    fi
-    if grep -q "Server listening on" /home/container/murmur.log 2>/dev/null; then
-        ready=1
-        break
-    fi
-    sleep 1
-done
-
-if [ "${ready}" -ne 1 ]; then
-    echo "ERROR: timed out waiting for mumble-server to listen on port ${PORT}."
-    tail -n 40 /home/container/murmur.log || true
-    kill -TERM "${MURMUR_PID}" 2>/dev/null || true
-    exit 1
-fi
-
-# Re-emit the done string on stdout in case tail -F has not flushed yet.
-grep "Server listening on" /home/container/murmur.log | tail -n 1
-
-# Prefer the port murmur actually bound, in case it differs from SERVER_PORT.
-LISTEN_PORT="$(python3 - << 'PY'
-import re
+# Wait until THIS boot's murmur is listening on $SERVER_PORT, or the process dies.
+python3 - "${MURMUR_PID}" "${PORT}" "${LOG_OFFSET}" "${MURMUR_INI}" << 'PY'
+import os, re, sys, time
 from pathlib import Path
-text = Path("/home/container/murmur.log").read_text(encoding="utf-8", errors="replace")
-ports = re.findall(r"Server listening on \S+:(\d+)", text)
-print(ports[-1] if ports else "")
-PY
-)"
-if [ -n "${LISTEN_PORT}" ] && [ "${LISTEN_PORT}" != "${PORT}" ]; then
-    echo "WARNING: murmur is listening on ${LISTEN_PORT}, not ${PORT}. Bragi will use ${LISTEN_PORT}."
-    PORT="${LISTEN_PORT}"
-fi
 
-# Do not start Bragi until 127.0.0.1:$PORT accepts a TLS handshake. The
-# "Server listening on" line can appear before the certificate is ready.
+pid = int(sys.argv[1])
+port = int(sys.argv[2])
+offset = int(sys.argv[3] or 0)
+ini_path = sys.argv[4]
+log_path = Path("/home/container/murmur.log")
+
+
+def proc_alive(process_id: int) -> bool:
+    try:
+        os.kill(process_id, 0)
+        return True
+    except OSError:
+        return False
+
+
+def new_log_text() -> str:
+    data = log_path.read_bytes() if log_path.exists() else b""
+    if offset >= len(data):
+        return ""
+    return data[offset:].decode("utf-8", errors="replace")
+
+
+def listening_ports(text: str) -> list[str]:
+    return re.findall(r"Server listening on \S+:(\d+)", text)
+
+
+def port_is_listening(p: int) -> bool:
+    needle = f":{p:04X}"
+    for path in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            lines = Path(path).read_text().splitlines()[1:]
+        except FileNotFoundError:
+            continue
+        for line in lines:
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            # 0A = TCP_LISTEN
+            if parts[3] == "0A" and parts[1].upper().endswith(needle):
+                return True
+    return False
+
+
+ini_ok = False
+listen_ok = False
+tcp_ok = False
+last_listen = ""
+deadline = time.time() + 45
+while time.time() < deadline:
+    if not proc_alive(pid):
+        print("ERROR: mumble-server exited before it started listening. Last log lines:", flush=True)
+        print(new_log_text() or log_path.read_text(encoding="utf-8", errors="replace")[-4000:], end="", flush=True)
+        sys.exit(1)
+    text = new_log_text()
+    if "Initializing settings from /home/container/murmur.ini" in text:
+        ini_ok = True
+    ports = listening_ports(text)
+    if ports:
+        last_listen = ports[-1]
+        if last_listen != str(port):
+            print(
+                f"ERROR: murmur is listening on {last_listen}, not SERVER_PORT={port}. "
+                f"It must be started with -ini {ini_path} and that file must have port={port}.",
+                flush=True,
+            )
+            print(text, end="", flush=True)
+            sys.exit(1)
+        listen_ok = True
+    tcp_ok = port_is_listening(port)
+    if listen_ok and tcp_ok:
+        break
+    time.sleep(0.25)
+
+text = new_log_text()
+if "Initializing settings from " in text and not ini_ok:
+    # Started with a different ini than /home/container/murmur.ini
+    src = re.findall(r"Initializing settings from (\S+)", text)
+    print(
+        "ERROR: mumble-server loaded "
+        + (src[-1] if src else "an unexpected ini")
+        + f" instead of {ini_path}.",
+        flush=True,
+    )
+    sys.exit(1)
+if not listen_ok or not tcp_ok:
+    print(
+        f"ERROR: mumble-server is not listening on 0.0.0.0:{port} "
+        f"(log_listen={'yes' if listen_ok else 'no'}, "
+        f"tcp_listen={'yes' if tcp_ok else 'no'}, "
+        f"last_listen_line_port={last_listen or 'none'}).",
+        flush=True,
+    )
+    print(text or "(no new murmur.log lines)", flush=True)
+    sys.exit(1)
+
+# Re-emit the done string from this boot only.
+for line in text.splitlines():
+    if "Server listening on" in line:
+        last = line
+    else:
+        last = last if "last" in dir() else ""
+matches = [line for line in text.splitlines() if "Server listening on" in line]
+if matches:
+    print(matches[-1], flush=True)
+PY
+
+# Do not start Bragi until 127.0.0.1:$SERVER_PORT accepts a TLS handshake.
+# The "Server listening on" line can appear before the certificate is ready.
 echo "Waiting for murmur to accept TLS on 127.0.0.1:${PORT}..."
 python3 - "${PORT}" << 'PY'
 import socket, ssl, sys, time
@@ -175,8 +235,11 @@ while time.time() < deadline:
             except Exception:
                 pass
         time.sleep(0.25)
-print(f"WARNING: {host}:{port} did not complete a TLS handshake in time ({last}). Starting Bragi anyway...", flush=True)
-sys.exit(0)
+print(
+    f"ERROR: {host}:{port} did not complete a TLS handshake in time ({last}).",
+    flush=True,
+)
+sys.exit(1)
 PY
 
 # Report the host/port Bragi will actually use. Never log the server password.
@@ -195,7 +258,7 @@ if ini.is_file():
         cfg_host = c.get("server", "host", fallback="")
         cfg_port = c.get("server", "port", fallback="")
 
-murmur_port = ""
+murmur_ports = []
 mp = Path("/home/container/murmur.ini")
 if mp.is_file():
     for line in mp.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -204,8 +267,7 @@ if mp.is_file():
             continue
         m = re.match(r"^port\s*=\s*(\d+)\s*$", s, re.I)
         if m:
-            murmur_port = m.group(1)
-            break
+            murmur_ports.append(m.group(1))
 
 server_ip = os.environ.get("SERVER_IP", "") or "unset"
 server_port = os.environ.get("SERVER_PORT", "") or "unset"
@@ -213,16 +275,21 @@ password_set = "set" if os.environ.get("SERVER_PASSWORD", "").strip() else "empt
 print(
     f"Bragi connecting to 127.0.0.1:{port} "
     f"(configuration.ini host={cfg_host or 'unset'} port={cfg_port or 'unset'}; "
-    f"murmur.ini port={murmur_port or 'unset'}; "
+    f"murmur.ini port={','.join(murmur_ports) or 'unset'}; "
     f"SERVER_PORT={server_port}; SERVER_IP={server_ip} is not used as the bot host; "
     f"SERVER_PASSWORD is {password_set}).",
     flush=True,
 )
+if port != server_port:
+    print(f"ERROR: wrapper port {port} does not match SERVER_PORT={server_port}.", flush=True)
+    sys.exit(1)
+if murmur_ports != [port]:
+    print(f"ERROR: murmur.ini ports {murmur_ports!r} do not match SERVER_PORT={port}.", flush=True)
+    sys.exit(1)
 PY
 
-# Force host/port on the CLI so a stale or default configuration.ini cannot
-# send the bot to SERVER_IP or port 64738. Password stays in the ini only
-# (it would otherwise appear in `ps`). Username is passed quoted.
+# Force host/port on the CLI so a stale configuration.ini cannot redirect the bot.
+# Password stays in the ini only (it would otherwise appear in `ps`).
 BRAGI_ARGS=(--config /home/container/configuration.ini --server 127.0.0.1 --port "${PORT}")
 if [ -n "${BOT_NAME:-}" ]; then
     BRAGI_ARGS+=(--user "${BOT_NAME}")

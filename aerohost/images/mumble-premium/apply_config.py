@@ -50,15 +50,20 @@ def murmur_ini_port() -> str:
 
 
 def resolve_port() -> str:
-    """Always prefer Wings SERVER_PORT. Never silently default to 64738 if
-    murmur.ini already has the allocation port from the egg config parser."""
-    from_env = valid_port(env("SERVER_PORT", ""))
-    if from_env:
-        return from_env
-    from_ini = murmur_ini_port()
-    if from_ini:
-        return from_ini
-    return "64738"
+    """Use Wings SERVER_PORT only. Never fall back to 64738 when it is set."""
+    raw = env("SERVER_PORT", "")
+    if raw:
+        port = valid_port(raw)
+        if not port:
+            print("ERROR: SERVER_PORT is set but is not a valid TCP port.", file=sys.stderr)
+            raise SystemExit(1)
+        return port
+    print(
+        "ERROR: SERVER_PORT is not set. Wings must inject the allocation port; "
+        "refusing to fall back to 64738.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
 
 def resolve_users() -> str:
@@ -141,6 +146,9 @@ def upsert_murmur(mapping: dict[str, str]) -> None:
             km = re.match(r"^;?\s*([A-Za-z0-9_]+)\s*=", line)
             if km and km.group(1).lower() in lower_keys:
                 key = lower_keys[km.group(1).lower()]
+                if key in seen:
+                    # Murmur honours the last port=/host= line, so drop leftovers.
+                    continue
                 out.append(f"{key}={mapping[key]}")
                 seen.add(key)
                 continue
@@ -150,6 +158,80 @@ def upsert_murmur(mapping: dict[str, str]) -> None:
         insert_missing()
 
     MURMUR_INI.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+
+def murmur_uncommented_ports() -> list[str]:
+    if not MURMUR_INI.exists():
+        return []
+    ports: list[str] = []
+    for line in MURMUR_INI.read_text(encoding="utf-8", errors="replace").splitlines():
+        s = line.strip()
+        if s.startswith(";") or s.startswith("#"):
+            continue
+        m = re.match(r"^port\s*=\s*(\d+)\s*$", s, re.I)
+        if m:
+            ports.append(m.group(1))
+    return ports
+
+
+def assert_murmur_port(port: str) -> None:
+    ports = murmur_uncommented_ports()
+    if ports != [port]:
+        print(
+            "ERROR: /home/container/murmur.ini must contain exactly one port="
+            + port + " line (found " + (", ".join(ports) if ports else "none") + ").",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+
+def clear_db_bind_overrides(port: str) -> None:
+    """Remove port/host rows from murmur.sqlite.
+
+    Murmur 1.5 honours config.port in the database over murmur.ini, so a leftover
+    64738 would keep the process on the default port even after we rewrite the ini.
+    """
+    db = CONTAINER / "murmur.sqlite"
+    if not db.exists():
+        return
+    try:
+        import sqlite3
+
+        con = sqlite3.connect(str(db), timeout=8)
+        try:
+            tables = {
+                row[0]
+                for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            if "config" not in tables:
+                return
+            rows = list(
+                con.execute(
+                    "SELECT server_id, key FROM config WHERE lower(key) IN ('port', 'host')"
+                )
+            )
+            if not rows:
+                return
+            con.execute("DELETE FROM config WHERE lower(key) IN ('port', 'host')")
+            con.commit()
+            print(
+                "Cleared "
+                + str(len(rows))
+                + " murmur.sqlite bind override(s) so murmur.ini port="
+                + port
+                + " is used.",
+                file=sys.stderr,
+            )
+        finally:
+            con.close()
+    except Exception as exc:
+        print(
+            "WARNING: could not clear murmur.sqlite bind overrides ("
+            + type(exc).__name__
+            + ").",
+            file=sys.stderr,
+        )
 
 
 def write_bragi_ini() -> None:
@@ -285,6 +367,8 @@ def main() -> int:
             "opusthreshold": "0",
         }
     )
+    assert_murmur_port(port)
+    clear_db_bind_overrides(port)
     write_bragi_ini()
     bot = env("BOT_NAME", "AeroHost DJ") or "AeroHost DJ"
     server_ip = env("SERVER_IP", "") or "unset"
