@@ -6,7 +6,7 @@
   },
   "exported_at": "2026-11-26T21:51:04-03:00",
   "name": "Mumble Premium — AeroHost",
-  "author": "support@aerohostt.duckdns.org",
+  "author": "support@example.com",
   "description": "Servidor Mumble de alta calidad (Opus, bandwidth 558000) con el bot de música Bragi en el mismo contenedor. Reproduce por búsqueda y por enlace en YouTube, SoundCloud y otras plataformas vía yt-dlp. El bot responde en inglés. Los enlaces de Spotify no se reproducen de forma nativa (DRM); busca el tema con !yplay. — AeroHost",
   "features": [],
   "docker_images": {

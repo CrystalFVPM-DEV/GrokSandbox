@@ -37,13 +37,14 @@ cleanup() {
 trap cleanup EXIT
 
 echo "==> Starting container on port ${PORT}"
-# Throwaway SuperUser password for the local test only; not shipped in the egg.
+# Ephemeral SuperUser password for this local test only; not shipped in the egg.
+TEST_SUPW="${TEST_SUPW:-$(openssl rand -hex 12)}"
 ${DOCKER} run -d --name "${NAME}" \
     -e SERVER_PORT="${PORT}" \
     -e MAX_USERS=10 \
     -e BANDWIDTH=558000 \
     -e SERVER_PASSWORD= \
-    -e SUPERUSER_PASSWORD="test-premium-pass" \
+    -e SUPERUSER_PASSWORD="${TEST_SUPW}" \
     -e BOT_NAME="AeroHost DJ" \
     -e BOT_VOLUME=80 \
     -e BOT_CHANNEL= \

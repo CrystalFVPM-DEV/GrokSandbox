@@ -86,7 +86,7 @@ Carpeta: `aerohost/eggs/dev/`
 - **Author:** no se cambió. El panel valida este campo como email (`required|email`). El valor `support@aerohost` no tiene TLD y puede hacer fallar la importación. Se dejaron los autores originales (crédito upstream).
 - **Generic Java:** `JARFILE` por defecto `sneakyhub.jar` → `server.jar`.
 - **Postgres 16:** usuario por defecto `pelican` → `aerohost`. `PGPASSWORD` sin valor por defecto y con regla `required|string|max:20` (el límite de 20 caracteres es del egg original). La descripción avisa que PostgreSQL escucha en `0.0.0.0` y que hay que restringirlo en el firewall.
-- **Redis 7:** `SERVER_PASSWORD` sin valor por defecto (antes `P@55w0rd`) y sigue siendo `required|string`.
+- **Redis 7:** `SERVER_PASSWORD` sin valor por defecto (se quitó la contraseña de ejemplo del egg upstream) y sigue siendo `required|string`.
 - **MariaDB 10.3:** el egg upstream **no tiene variables** (tampoco de contraseña). No se añadió ninguna, porque habría que tocar el script de instalación y el startup, que deben quedar intactos. El arranque original termina en `mysql -u root` sin contraseña. Trátalo como riesgo y no lo expongas a internet.
 
 Scripts de instalación e imágenes: sin cambios.
