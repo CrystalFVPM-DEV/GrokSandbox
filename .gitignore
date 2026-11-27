@@ -1,0 +1,6 @@
+# Credentials and local secrets — never commit these
+.env
+.env.*
+*.token
+youtube-cookies.txt
+*.pem

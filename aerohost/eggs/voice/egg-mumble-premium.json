@@ -1,0 +1,112 @@
+{
+  "_comment": "AeroHost Mumble Premium — PTDL_v2 for Pterodactyl 1.15.x. Custom image must be published before use on Wings.",
+  "meta": {
+    "version": "PTDL_v2",
+    "update_url": null
+  },
+  "exported_at": "2026-11-26T21:51:04-03:00",
+  "name": "Mumble Premium — AeroHost",
+  "author": "support@aerohostt.duckdns.org",
+  "description": "Servidor Mumble de alta calidad (Opus, bandwidth 558000) con el bot de música Bragi en el mismo contenedor. Reproduce por búsqueda y por enlace en YouTube, SoundCloud y otras plataformas vía yt-dlp. El bot responde en inglés. Los enlaces de Spotify no se reproducen de forma nativa (DRM); busca el tema con !yplay. — AeroHost",
+  "features": [],
+  "docker_images": {
+    "Mumble Premium": "ghcr.io/crystalfvpm-dev/aerohost-mumble-premium:1.0"
+  },
+  "file_denylist": [],
+  "startup": "/opt/aerohost/start-premium.sh",
+  "config": {
+    "files": "{\"murmur.ini\":{\"parser\":\"ini\",\"find\":{\"database\":\"/home/container/murmur.sqlite\",\"logfile\":\"/home/container/murmur.log\",\"pidfile\":\"/home/container/murmur.pid\",\"port\":\"{{server.build.default.port}}\",\"host\":\"0.0.0.0\",\"users\":\"{{server.build.env.MAX_USERS}}\",\"bandwidth\":\"{{server.build.env.BANDWIDTH}}\",\"serverpassword\":\"{{server.build.env.SERVER_PASSWORD}}\",\"opusthreshold\":\"0\"}}}",
+    "startup": "{\"done\":\"Server listening on\"}",
+    "logs": "{}",
+    "stop": "^C"
+  },
+  "scripts": {
+    "installation": {
+      "script": "#!/bin/ash\nset -e\n\nmkdir -p /mnt/server/music /mnt/server/tmp\ncd /mnt/server\n\nif [ ! -f /mnt/server/murmur.ini ]; then\n    echo \"Writing default high-quality murmur.ini\"\n    cat > /mnt/server/murmur.ini << 'EOF'\n; AeroHost Mumble Premium — murmur/mumble-server configuration\n; Panel variables (port, users, bandwidth, server password) are applied on every start.\n; Do not put the SuperUser password in this file; it is set with mumble-server -supw.\n\ndatabase=/home/container/murmur.sqlite\nlogfile=/home/container/murmur.log\npidfile=/home/container/murmur.pid\n\nwelcometext=\"<br/>Welcome to <b>AeroHost Mumble Premium</b> — high-quality Opus voice plus a music bot.<br/>Music commands (English): <b>!yplay</b> &lt;search&gt;, <b>!ysearch</b> &lt;query&gt;, <b>!url</b> or <b>!play</b> &lt;YouTube / SoundCloud / other link&gt;, <b>!volume</b> 0-100, <b>!skip</b>, <b>!stop</b>, <b>!queue</b>, <b>!help</b>.<br/>Spotify links are not streamed natively (DRM). Search the track with !yplay instead.<br/>\"\n\nport=64738\nhost=0.0.0.0\nserverpassword=\nbandwidth=558000\nusers=40\n\n; 0 = always use Opus (preferred). 558000 bit/s is the official Mumble maximum/default.\nopusthreshold=0\n\n; Ice is unused in this egg and is left disabled on purpose.\nicesecretwrite=\nEOF\nelse\n    echo \"murmur.ini already exists, leaving it in place.\"\nfi\n\nif [ ! -f /mnt/server/COMMANDS.txt ]; then\n    cat > /mnt/server/COMMANDS.txt << 'EOF'\nAeroHost Mumble Premium — music bot commands (English)\n\nThe bot replies in English. Prefix: !\n\n  !yplay <search>     Search YouTube and play the first result\n  !ysearch <query>    Search YouTube and pick from a short list\n  !url <link>         Play a YouTube, SoundCloud, or other yt-dlp URL\n  !play <link|file>   Play a URL or a local file\n  !volume 0-100       Set volume\n  !pause / !stop      Pause or stop\n  !skip               Skip the current track\n  !queue              Show the playlist\n  !radio <name>       Play a configured radio station\n  !rbquery <search>   Search radio-browser.info\n  !help               Full command list\n\nSpotify: links are not streamed natively (no official stream / DRM).\nUse !yplay with the track and artist name instead.\n\nIf YouTube searches fail from a datacenter IP, place a Netscape-format\ncookie file at youtube-cookies.txt in this folder and restart the server.\nEOF\nfi\n\necho \"AeroHost Mumble Premium install files are ready.\"\necho \"done\"\n",
+      "container": "ghcr.io/pterodactyl/installers:alpine",
+      "entrypoint": "ash"
+    }
+  },
+  "variables": [
+    {
+      "name": "Server Port",
+      "description": "Port Mumble binds to (TCP and UDP). Must match the server allocation. The music bot connects to 127.0.0.1 on this port.",
+      "env_variable": "SERVER_PORT",
+      "default_value": "64738",
+      "user_viewable": true,
+      "user_editable": false,
+      "rules": "required|numeric|digits_between:1,5",
+      "field_type": "text"
+    },
+    {
+      "name": "Maximum Users",
+      "description": "Maximum concurrent clients, including the music bot. 40 is a sensible default for a high-quality voice + music server.",
+      "env_variable": "MAX_USERS",
+      "default_value": "40",
+      "user_viewable": true,
+      "user_editable": false,
+      "rules": "required|numeric|digits_between:1,5",
+      "field_type": "text"
+    },
+    {
+      "name": "Bandwidth",
+      "description": "Maximum client bandwidth in bits per second. 558000 is the official Mumble maximum and the high-quality default. Do not set higher; the server will cap it.",
+      "env_variable": "BANDWIDTH",
+      "default_value": "558000",
+      "user_viewable": true,
+      "user_editable": false,
+      "rules": "required|numeric|between:10000,558000",
+      "field_type": "text"
+    },
+    {
+      "name": "Server Password",
+      "description": "Password required to join the server. Leave empty for an open server. Never stored in the egg defaults.",
+      "env_variable": "SERVER_PASSWORD",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:128",
+      "field_type": "text"
+    },
+    {
+      "name": "SuperUser Password",
+      "description": "Password for the Mumble SuperUser account. Set on every start via mumble-server -supw. Choose at least 8 characters. Never leave this as a hardcoded default.",
+      "env_variable": "SUPERUSER_PASSWORD",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|min:8|max:128",
+      "field_type": "text"
+    },
+    {
+      "name": "Bot Name",
+      "description": "Display name of the music bot on the Mumble server.",
+      "env_variable": "BOT_NAME",
+      "default_value": "AeroHost DJ",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:32",
+      "field_type": "text"
+    },
+    {
+      "name": "Bot Default Volume",
+      "description": "Default music bot volume from 1 to 100. Used when the bot starts (unless a previous volume was saved in its database).",
+      "env_variable": "BOT_VOLUME",
+      "default_value": "80",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|numeric|between:1,100",
+      "field_type": "text"
+    },
+    {
+      "name": "Bot Channel",
+      "description": "Channel the music bot should join. Leave empty to stay in Root. Create the channel in Mumble first if you set a name here (for example Music).",
+      "env_variable": "BOT_CHANNEL",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:64",
+      "field_type": "text"
+    }
+  ]
+}

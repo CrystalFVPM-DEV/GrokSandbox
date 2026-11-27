@@ -1,0 +1,22 @@
+; AeroHost Mumble Premium — murmur/mumble-server configuration
+; Panel variables (port, users, bandwidth, server password) are applied on every start.
+; Do not put the SuperUser password in this file; it is set with mumble-server -supw.
+
+database=/home/container/murmur.sqlite
+logfile=/home/container/murmur.log
+pidfile=/home/container/murmur.pid
+
+welcometext="<br/>Welcome to <b>AeroHost Mumble Premium</b> — high-quality Opus voice plus a music bot.<br/>Music commands (English): <b>!yplay</b> &lt;search&gt;, <b>!ysearch</b> &lt;query&gt;, <b>!url</b> or <b>!play</b> &lt;YouTube / SoundCloud / other link&gt;, <b>!volume</b> 0-100, <b>!skip</b>, <b>!stop</b>, <b>!queue</b>, <b>!help</b>.<br/>Spotify links are not streamed natively (DRM). Search the track with !yplay instead.<br/>"
+
+port=64738
+host=0.0.0.0
+serverpassword=
+bandwidth=558000
+users=40
+
+; 0 = always use Opus (preferred). 558000 bit/s is the official Mumble maximum/default.
+opusthreshold=0
+
+; Ice is unused in this egg and is left disabled on purpose.
+;ice="tcp -h 127.0.0.1 -p 6502"
+icesecretwrite=
