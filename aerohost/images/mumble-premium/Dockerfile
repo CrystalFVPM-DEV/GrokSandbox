@@ -45,6 +45,7 @@ RUN git clone --depth 1 --branch "${BRAGI_VERSION}" https://git.stormux.org/stor
 
 COPY murmur.ini.template entrypoint.sh start-premium.sh apply_config.py /opt/aerohost/
 RUN chmod 755 /opt/aerohost/entrypoint.sh /opt/aerohost/start-premium.sh /opt/aerohost/apply_config.py \
+    && ln -sf /opt/aerohost/entrypoint.sh /entrypoint.sh \
     && useradd -m -d /home/container -s /bin/bash container \
     && mkdir -p /home/container \
     && chown -R container:container /home/container \
@@ -52,6 +53,9 @@ RUN chmod 755 /opt/aerohost/entrypoint.sh /opt/aerohost/start-premium.sh /opt/ae
     && chmod -R a+rX /opt/aerohost
 
 USER container
+ENV USER=container HOME=/home/container
 WORKDIR /home/container
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/opt/aerohost/entrypoint.sh"]
+# Wings expects the yolk pattern: tini as PID 1, /entrypoint.sh reads $STARTUP.
+ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
+CMD ["/entrypoint.sh"]
